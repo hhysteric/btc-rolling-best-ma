@@ -1,0 +1,194 @@
+/* ==========================================================================
+   4Y Rolling Best MA —— 样式
+   亮色为默认（:root），深色通过 <html data-theme="dark"> 覆盖变量。
+   图表内部配色由 js/charts.js 的 THEMES 同步切换。
+   ========================================================================== */
+
+:root {
+    color-scheme: light;
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --panel-2: #f1f3f6;
+    --border: #e2e6ec;
+    --text: #111827;
+    --text-2: #4b5563;
+    --muted: #8b98a5;
+    --gold: #f7931a;
+    --green: #059669;
+    --red: #dc2626;
+    --shadow: 0 1px 3px rgba(16, 24, 40, 0.06), 0 8px 24px rgba(16, 24, 40, 0.04);
+}
+
+html[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0d1117;
+    --panel: #151a23;
+    --panel-2: #1b2230;
+    --border: #263041;
+    --text: #e6edf3;
+    --text-2: #b6c2cf;
+    --muted: #8b98a5;
+    --green: #00d395;
+    --red: #ff4757;
+    --shadow: none;
+}
+
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                 "Hiragino Sans GB", "Microsoft YaHei", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+}
+
+/* ------------------------------------------------------------------ 顶栏 */
+.topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; padding: 14px 20px;
+    background: var(--panel); border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 30;
+}
+.brand { display: flex; align-items: center; gap: 12px; }
+.logo {
+    width: 38px; height: 38px; flex: none;
+    display: grid; place-items: center;
+    background: var(--gold); color: #fff;
+    border-radius: 10px; font-size: 20px; font-weight: 700;
+}
+.topbar h1 { margin: 0; font-size: 17px; letter-spacing: 0.3px; }
+.topbar .sub { margin: 0; color: var(--muted); font-size: 12px; }
+.topbar-actions { display: flex; gap: 8px; }
+
+main { max-width: 1440px; margin: 0 auto; padding: 18px 20px 40px; }
+
+/* ------------------------------------------------------------------ 卡片 */
+.cards {
+    display: grid; gap: 12px; margin-bottom: 16px;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+.card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 14px 16px; box-shadow: var(--shadow);
+}
+.card.wide { grid-column: span 2; min-width: 320px; }
+.card-label { color: var(--muted); font-size: 12px; }
+.card-value { font-size: 24px; font-weight: 700; margin-top: 2px; }
+.card-value.sm { font-size: 16px; }
+.card-sub { color: var(--text-2); font-size: 12px; }
+
+.mini-table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 4px; }
+.mini-table th, .mini-table td { padding: 3px 6px; border-bottom: 1px solid var(--border); text-align: left; }
+.mini-table th { color: var(--muted); font-weight: 500; }
+.mini-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.mini-table td.pos { color: var(--green); }
+.mini-table td.neg { color: var(--red); }
+
+/* ------------------------------------------------------------------ 面板 */
+.panel {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 14px 16px 16px;
+    margin-bottom: 16px; box-shadow: var(--shadow);
+}
+.panel-head {
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 10px; margin-bottom: 10px;
+}
+.panel-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
+.hint { color: var(--muted); font-size: 12px; }
+.ctrls { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+
+/* ------------------------------------------------------------------ 控件 */
+.btn {
+    appearance: none; cursor: pointer;
+    background: var(--panel-2); color: var(--text-2);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 5px 11px; font-size: 12.5px; font-family: inherit;
+    transition: background .15s, color .15s, border-color .15s;
+}
+.btn:hover { border-color: var(--gold); color: var(--text); }
+.btn.active, .btn.primary { background: var(--gold); border-color: var(--gold); color: #fff; }
+.btn.primary:hover { color: #fff; filter: brightness(1.05); }
+.btn.select { padding: 5px 8px; }
+.seg { display: inline-flex; }
+.seg .seg-btn { border-radius: 0; margin-left: -1px; }
+.seg .seg-btn:first-child { border-radius: 8px 0 0 8px; margin-left: 0; }
+.seg .seg-btn:last-child { border-radius: 0 8px 8px 0; }
+
+.cfg-grid {
+    display: grid; gap: 10px 16px; align-items: end;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+.cfg-grid > label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 12px; }
+.cfg-grid input[type="number"] {
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 5px 8px; font-size: 13px; font-family: inherit; width: 100%;
+}
+.checks { display: flex; gap: 12px; padding-top: 3px; }
+.chk { display: inline-flex; align-items: center; gap: 4px; color: var(--text-2); font-size: 12.5px; }
+.chk input { accent-color: var(--gold); }
+
+/* ------------------------------------------------------------------ 图表 */
+.chart-box {
+    position: relative; height: 460px;
+    background: var(--panel); border-radius: 10px;
+}
+.chart-box.fullscreen {
+    position: fixed; inset: 0; z-index: 60; height: 100vh;
+    padding: 20px; border-radius: 0;
+}
+.note { color: var(--text-2); font-size: 12.5px; margin: 10px 0 0; }
+.note.muted, .muted { color: var(--muted); }
+.sm { font-size: 12px; }
+pre {
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; overflow-x: auto; font-size: 12.5px;
+}
+code { font-size: 12.5px; }
+
+/* -------------------------------------------------------------- 页脚 / 遮罩 */
+footer {
+    max-width: 1440px; margin: 0 auto; padding: 0 20px 32px;
+    color: var(--text-2); font-size: 12px;
+}
+footer p { margin: 4px 0; }
+
+.overlay {
+    display: none; position: fixed; inset: 0; z-index: 80;
+    align-items: center; justify-content: center;
+    background: rgba(15, 23, 42, 0.35); backdrop-filter: blur(2px);
+}
+.overlay-card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 14px; padding: 22px 26px; min-width: 320px;
+    text-align: center; box-shadow: 0 20px 50px rgba(0, 0, 0, .2);
+}
+.overlay-card p { margin: 6px 0; }
+.spinner {
+    width: 26px; height: 26px; margin: 0 auto 8px;
+    border: 3px solid var(--border); border-top-color: var(--gold);
+    border-radius: 50%; animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.progress { height: 6px; background: var(--panel-2); border-radius: 999px; overflow: hidden; }
+.progress-bar { height: 100%; width: 2%; background: var(--gold); transition: width .2s; }
+
+.error-panel {
+    display: none; position: fixed; z-index: 90;
+    left: 50%; top: 50%; transform: translate(-50%, -50%);
+    max-width: 620px; width: calc(100% - 40px);
+    background: var(--panel); border: 1px solid var(--red);
+    border-radius: 14px; padding: 20px 22px;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, .25);
+}
+.error-panel p { margin: 8px 0; }
+
+@media (max-width: 720px) {
+    .chart-box { height: 360px; }
+    .card.wide { grid-column: span 1; }
+    main { padding: 14px 12px 32px; }
+}

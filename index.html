@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>4Y Rolling Best MA · 比特币四年窗口最优均线</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<header class="topbar">
+    <div class="brand">
+        <span class="logo">₿</span>
+        <div>
+            <h1>4Y Rolling Best MA</h1>
+            <p class="sub">每日回看 4 年窗口，穷举所有均线参数，找出当时最赚钱的那一根</p>
+        </div>
+    </div>
+    <div class="topbar-actions">
+        <button id="btn-theme" class="btn">深色</button>
+    </div>
+</header>
+
+<main>
+
+<!-- ------------------------------------------------------------------ 概览 -->
+<section class="cards">
+    <div class="card">
+        <div class="card-label">最新收盘价</div>
+        <div class="card-value" id="stat-price">-</div>
+        <div class="card-sub">数据截止 <span id="stat-date">-</span></div>
+    </div>
+    <div class="card">
+        <div class="card-label">四年大周期阶段</div>
+        <div class="card-value sm" id="stat-phase">-</div>
+        <div class="card-sub" id="stat-phase-sub">-</div>
+    </div>
+    <div class="card">
+        <div class="card-label">满窗起始</div>
+        <div class="card-value sm" id="stat-window">-</div>
+        <div class="card-sub" id="stat-window-sub">-</div>
+    </div>
+    <div class="card wide">
+        <div class="card-label">最新一天的最优参数（各线型）</div>
+        <div id="best-table"><p class="muted">计算中…</p></div>
+    </div>
+</section>
+
+<!-- -------------------------------------------------------------- 计算配置 -->
+<section class="panel">
+    <div class="panel-head">
+        <h2>计算配置</h2>
+        <span class="hint">改完点「重新计算」。周期范围越宽、步长越小，耗时越长（双均线是全配对穷举）。</span>
+    </div>
+    <div class="cfg-grid">
+        <label>线型
+            <span class="checks">
+                <label class="chk"><input type="checkbox" id="cfg-ma" checked> MA</label>
+                <label class="chk"><input type="checkbox" id="cfg-ema" checked> EMA</label>
+            </span>
+        </label>
+        <label>模式
+            <span class="checks">
+                <label class="chk"><input type="checkbox" id="cfg-single" checked> 单均线</label>
+                <label class="chk"><input type="checkbox" id="cfg-double" checked> 双均线（金叉）</label>
+            </span>
+        </label>
+        <label>周期下限 <input type="number" id="cfg-period-min" value="5" min="2" max="500"></label>
+        <label>周期上限 <input type="number" id="cfg-period-max" value="250" min="3" max="500"></label>
+        <label>步长 <input type="number" id="cfg-period-step" value="1" min="1" max="50"></label>
+        <label>单边手续费 % <input type="number" id="cfg-fee" value="0" min="0" max="1" step="0.01"></label>
+        <button id="btn-recompute" class="btn primary">重新计算</button>
+    </div>
+</section>
+
+<!-- ---------------------------------------------------- 主图：Rolling Best -->
+<section class="panel">
+    <div class="panel-head">
+        <h2>4Y Rolling Best MA 时间序列</h2>
+        <div class="ctrls">
+            <span class="seg">
+                <button class="btn seg-btn active" data-metric="period">最优均线周期</button>
+                <button class="btn seg-btn" data-metric="ret">最优策略收益率</button>
+            </span>
+            <button id="btn-price-log" class="btn">价格：对数</button>
+            <button class="btn" data-reset="main">重置缩放</button>
+            <button class="btn" data-full="main-box">全屏</button>
+        </div>
+    </div>
+    <div class="chart-box" id="main-box">
+        <canvas id="main-chart"></canvas>
+    </div>
+    <p class="note">
+        左轴为「该日回看 4 年窗口内最赚钱的均线参数」（双均线画快线与慢线两条），右轴为 BTC 收盘价。
+        滚轮缩放（Shift 只缩纵轴、Ctrl 只缩横轴），拖动平移。参数在牛熊之间的漂移本身就是信息：
+        趋势行情里最优周期通常被拉长，震荡行情里被压短。
+    </p>
+</section>
+
+<!-- ------------------------------------- 新栏目：四年大周期对比（三种对齐） -->
+<section class="panel">
+    <div class="panel-head">
+        <h2>4Y Rolling Best MA 四年大周期对比</h2>
+        <div class="ctrls">
+            <span class="seg">
+                <button class="btn seg-btn active" data-anchor="peak">从各轮最高点对齐</button>
+                <button class="btn seg-btn" data-anchor="trough">从各轮最低点对齐</button>
+                <button class="btn seg-btn" data-anchor="halving">从各轮减半日对齐</button>
+            </span>
+            <select id="cycle-series" class="btn select"></select>
+            <span class="seg">
+                <button class="btn seg-btn active" data-metric="period">最优周期</button>
+                <button class="btn seg-btn" data-metric="ret">收益率</button>
+            </span>
+            <button class="btn" data-reset="cycle">重置缩放</button>
+            <button class="btn" data-full="cycle-box">全屏</button>
+        </div>
+    </div>
+    <div class="chart-box" id="cycle-box">
+        <canvas id="cycle-chart"></canvas>
+    </div>
+    <p class="note" id="cycle-insight">计算中…</p>
+    <p class="note muted">
+        横轴为「距该轮锚点的天数」，四轮曲线叠在同一坐标里比较相同周期位置上的最优参数。
+        三角形标记为该轮极大值，菱形标记为本轮最新位置。
+        <span id="cycle-leg-note">收益率口径下双均线只有一条曲线（快慢线共用同一收益率）。</span>
+    </p>
+</section>
+
+</main>
+
+<footer>
+    <p id="footer-meta">-</p>
+    <p class="muted">
+        本站不编造任何数据：行情缺失时只显示截止日期，不做插值或外推。
+        窗口寻优是「事后回看」的最优参数，用于观察行情结构变化，不构成投资建议。
+    </p>
+</footer>
+
+<!-- ------------------------------------------------------------ 加载 / 报错 -->
+<div id="loading" class="overlay">
+    <div class="overlay-card">
+        <div class="spinner"></div>
+        <p id="progress-text">加载中…</p>
+        <div class="progress"><div id="progress-bar" class="progress-bar"></div></div>
+        <p class="muted sm">4 年窗口 × 全参数穷举，首次计算需要几秒到几十秒。</p>
+    </div>
+</div>
+<div id="error-panel" class="error-panel"><div id="error-text"></div></div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+<script>
+// 插件 UMD 包在不同版本里的全局名与导出形态不一致（有的挂 window.ChartZoom，
+// 有的挂 window['chartjs-plugin-zoom']，有的还包了一层 .default），这里做一次幂等兜底注册。
+// 注册失败不影响出图：只是滚轮缩放与极值标注会失效，控制台会有提示。
+(function () {
+    if (typeof Chart === 'undefined') return;
+    const reg = (name, p) => {
+        const plugin = p && (p.id ? p : p.default);
+        if (!plugin) { console.warn('[chart] 未找到插件全局对象：' + name); return; }
+        try { Chart.register(plugin); } catch (e) { console.warn('[chart] 注册 ' + name + ' 失败', e); }
+    };
+    reg('annotation', window['chartjs-plugin-annotation'] || window.ChartAnnotation);
+    reg('zoom', window.ChartZoom || window['chartjs-plugin-zoom']);
+})();
+</script>
+<script src="js/rolling.js"></script>
+<script src="js/data.js"></script>
+<script src="js/charts.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
