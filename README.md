@@ -49,6 +49,7 @@ js/app.js                     装配：加载 → 寻优 → 渲染 → 交互
 data/btc-daily.json           日线数据（date, open, high, low, close），升序
 scripts/update_data.py        增量补最新日线（GitHub Actions 每日调用）
 scripts/verify_rolling.mjs    校验快速实现与原始逐笔模拟等价
+verify.bat                    双击跑上面这个校验脚本（可传 SAMPLES PMAX PSTEP）
 .github/workflows/update-data.yml   每日 01:10 UTC 自动更新数据并提交
 ```
 
