@@ -83,17 +83,112 @@
                 <button class="btn seg-btn" data-metric="ret">最优策略收益率</button>
             </span>
             <button id="btn-price-log" class="btn">价格：对数</button>
-            <button class="btn" data-reset="main">重置缩放</button>
-            <button class="btn" data-full="main-box">全屏</button>
+            <button class="btn" data-reset="main-all">重置缩放</button>
         </div>
     </div>
-    <div class="chart-box" id="main-box">
-        <canvas id="main-chart"></canvas>
+    <div class="chart-grid">
+        <div class="chart-cell">
+            <div class="cell-head">
+                <span class="cell-title">MA 单均线</span>
+                <span class="cell-btns">
+                    <button class="btn xs" data-reset="main-ma-single">重置</button>
+                    <button class="btn xs" data-full="box-ma-single">全屏</button>
+                </span>
+            </div>
+            <div class="chart-box sm" id="box-ma-single">
+                <canvas id="main-ma-single"></canvas>
+                <div class="chart-empty" style="display:none"></div>
+            </div>
+        </div>
+        <div class="chart-cell">
+            <div class="cell-head">
+                <span class="cell-title">MA 双均线（金叉）</span>
+                <span class="cell-btns">
+                    <button class="btn xs" data-reset="main-ma-double">重置</button>
+                    <button class="btn xs" data-full="box-ma-double">全屏</button>
+                </span>
+            </div>
+            <div class="chart-box sm" id="box-ma-double">
+                <canvas id="main-ma-double"></canvas>
+                <div class="chart-empty" style="display:none"></div>
+            </div>
+        </div>
+        <div class="chart-cell">
+            <div class="cell-head">
+                <span class="cell-title">EMA 单均线</span>
+                <span class="cell-btns">
+                    <button class="btn xs" data-reset="main-ema-single">重置</button>
+                    <button class="btn xs" data-full="box-ema-single">全屏</button>
+                </span>
+            </div>
+            <div class="chart-box sm" id="box-ema-single">
+                <canvas id="main-ema-single"></canvas>
+                <div class="chart-empty" style="display:none"></div>
+            </div>
+        </div>
+        <div class="chart-cell">
+            <div class="cell-head">
+                <span class="cell-title">EMA 双均线（金叉）</span>
+                <span class="cell-btns">
+                    <button class="btn xs" data-reset="main-ema-double">重置</button>
+                    <button class="btn xs" data-full="box-ema-double">全屏</button>
+                </span>
+            </div>
+            <div class="chart-box sm" id="box-ema-double">
+                <canvas id="main-ema-double"></canvas>
+                <div class="chart-empty" style="display:none"></div>
+            </div>
+        </div>
     </div>
     <p class="note">
+        四种线型各一张图：纵轴自适应，不会被单均线的 200 天量级压平双均线快线的十几天量级。
         左轴为「该日回看 4 年窗口内最赚钱的均线参数」（双均线画快线与慢线两条），右轴为 BTC 收盘价。
         滚轮缩放（Shift 只缩纵轴、Ctrl 只缩横轴），拖动平移。参数在牛熊之间的漂移本身就是信息：
         趋势行情里最优周期通常被拉长，震荡行情里被压短。
+    </p>
+</section>
+
+<!-- --------------------------------------------------- 自定义均线回测栏目 -->
+<section class="panel">
+    <div class="panel-head">
+        <h2>自定义均线回测</h2>
+        <span class="hint">指定线型、周期与时间区间，看买卖点与收益率。均线用全历史数据计算后再截区间（指标已预热）。</span>
+    </div>
+    <div class="cfg-grid">
+        <label>线型
+            <select id="bt-type" class="select">
+                <option value="ma" selected>MA</option>
+                <option value="ema">EMA</option>
+            </select>
+        </label>
+        <label>模式
+            <select id="bt-mode" class="select">
+                <option value="single" selected>单均线（价格上穿）</option>
+                <option value="double">双均线（金叉）</option>
+            </select>
+        </label>
+        <label id="bt-period-wrap">周期 <input type="number" id="bt-period" value="200" min="2" max="1000"></label>
+        <label id="bt-short-wrap" style="display:none">快线 <input type="number" id="bt-short" value="50" min="2" max="1000"></label>
+        <label id="bt-long-wrap" style="display:none">慢线 <input type="number" id="bt-long" value="200" min="3" max="1000"></label>
+        <label>开始日期 <input type="date" id="bt-start"></label>
+        <label>结束日期 <input type="date" id="bt-end"></label>
+        <label>单边手续费 % <input type="number" id="bt-fee" value="0" min="0" max="1" step="0.01"></label>
+        <button id="btn-backtest" class="btn primary">运行回测</button>
+    </div>
+    <div id="bt-stats" class="stat-row"></div>
+    <div class="ctrls right">
+        <button id="btn-bt-log" class="btn">纵轴：对数</button>
+        <button class="btn" data-reset="custom">重置缩放</button>
+        <button class="btn" data-full="custom-box">全屏</button>
+    </div>
+    <div class="chart-box" id="custom-box">
+        <canvas id="custom-chart"></canvas>
+        <div class="chart-empty" id="custom-empty">设定参数后点「运行回测」</div>
+    </div>
+    <div id="bt-trades"></div>
+    <p class="note muted">
+        规则与主图寻优完全一致：满仓择时、按当日收盘价成交、每笔收一次单边手续费。
+        绿色上三角为买入，红色下三角为卖出；右轴为净值（起点 = 1），虚线是同区间买入持有。
     </p>
 </section>
 

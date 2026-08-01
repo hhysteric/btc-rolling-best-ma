@@ -61,10 +61,14 @@ if (typeof Chart !== 'undefined') Chart.register(crosshairPlugin);
 
 // plugin-zoom v2 会把函数型 mode 归一化成字符串，导致"按修饰键选轴"失效，
 // 因此关掉插件自带的滚轮缩放，改由 attachModifierZoom 挂原生 wheel 监听。
-const makeZoomConfig = () => ({
-    pan: { enabled: true, mode: 'xy', modifierKey: null },
-    zoom: { wheel: { enabled: false }, pinch: { enabled: true }, mode: 'xy' },
-});
+const makeZoomConfig = (limits) => {
+    const cfg = {
+        pan: { enabled: true, mode: 'xy', modifierKey: null },
+        zoom: { wheel: { enabled: false }, pinch: { enabled: true }, mode: 'xy' },
+    };
+    if (limits) cfg.limits = limits;      // 例如 { y: { min: 0 } }：均线周期不可能是负数
+    return cfg;
+};
 
 function zoomOneAxis(chart, id, factor, pos) {
     const sc = chart.scales[id];
@@ -81,6 +85,9 @@ function zoomOneAxis(chart, id, factor, pos) {
         lo = anchor - (anchor - lo) / factor;
         hi = anchor + (hi - anchor) / factor;
     }
+    // 语义下限（周期 / 价格都不可能为负），避免缩放后轴跑到 -93 天这种无意义区间
+    const floor = chart._floors ? chart._floors[id] : undefined;
+    if (floor != null && lo < floor) lo = floor;
     if (!isFinite(lo) || !isFinite(hi) || hi <= lo) return;
     // zoom 插件没加载成功时退回直接改坐标轴范围，保证滚轮至少还能用
     if (typeof chart.zoomScale === 'function') chart.zoomScale(id, { min: lo, max: hi }, 'none');
@@ -131,6 +138,20 @@ const fmtMoney = (v) => {
 };
 const fmtPct = (v) => (v == null || Number.isNaN(v) ? '-' : (v * 100).toFixed(v > 10 ? 0 : 1) + '%');
 
+// 坐标轴刻度格式化。缩放之后轴的 min/max 会变成任意小数，
+// 若直接把数值原样返回，Chart.js 会打印出 -155.85809446958132 这种全精度串（原来的 bug）。
+const fmtTick = (v) => {
+    const n = Number(v);
+    if (!isFinite(n)) return '';
+    const a = Math.abs(n);
+    if (a >= 10000) return Math.round(n).toLocaleString('en-US');
+    if (a >= 10) return String(Math.round(n));
+    if (a >= 1) return n.toFixed(1);
+    if (a === 0) return '0';
+    return n.toFixed(2);
+};
+const fmtTickPct = (v) => fmtTick(v) + '%';
+
 const ChartsModule = {
     charts: {},
     themeName: 'light',      // 'light' | 'dark'，默认亮色
@@ -138,7 +159,7 @@ const ChartsModule = {
     t() { return THEMES[this.themeName] || THEMES.light; },
     setTheme(name) { this.themeName = name === 'dark' ? 'dark' : 'light'; },
 
-    defaults() {
+    defaults(limits) {
         const c = this.t();
         return {
             responsive: true,
@@ -150,7 +171,7 @@ const ChartsModule = {
                 legend: { labels: { color: c.legend, font: { size: 11 }, boxWidth: 14, usePointStyle: false } },
                 tooltip: { backgroundColor: c.tooltipBg, borderColor: c.tooltipBorder, borderWidth: 1, titleColor: c.legend, bodyColor: c.legend },
                 crosshair: { enabled: true, color: c.crosshair },
-                zoom: makeZoomConfig(),
+                zoom: makeZoomConfig(limits),
             },
         };
     },
@@ -176,96 +197,133 @@ const ChartsModule = {
     resizeAll() { Object.values(this.charts).forEach((c) => c.resize()); },
 
     // ------------------------------------------------------------------
-    // 主图：4Y Rolling Best MA
-    //   左轴 = 每日回看 4 年窗口内的「最优均线周期」或「最优策略收益率」
-    //   右轴 = BTC 收盘价（可切对数），用来对照参数变动与行情阶段的关系
+    // 主图：4Y Rolling Best MA —— 拆成四张（单 MA / 双 MA / 单 EMA / 双 EMA）
+    //   四条曲线画在一张图里时，单均线的 200 天量级会把双均线快线的 10 天量级压平，
+    //   四种线型各占一张后纵轴自适应，形状才看得清。
+    //   每张：左轴 = 该组合窗口内的「最优均线周期」或「最优策略收益率」
+    //         右轴 = BTC 收盘价（可切对数），用来对照参数变动与行情阶段
     // ------------------------------------------------------------------
-    renderMain(result, state) {
-        this.destroyChart('main');
-        const el = document.getElementById('main-chart');
-        if (!el || !result) return;
-        const data = DataModule.processedData;
-        const metric = state.metric === 'ret' ? 'ret' : 'period';
-        const datasets = [];
+    MAIN_CELLS: [
+        { key: 'ma_single', id: 'main-ma-single' },
+        { key: 'ma_double', id: 'main-ma-double' },
+        { key: 'ema_single', id: 'main-ema-single' },
+        { key: 'ema_double', id: 'main-ema-double' },
+    ],
 
+    // 把一条序列展开成图表数据集（单均线 1 条；双均线快 / 慢各 1 条；收益率模式 1 条）
+    _seriesLines(s, metric, data) {
+        const out = [];
         const pushLine = (styleKey, values, isRet, labelOverride) => {
+            if (!values) return;
             const st = SERIES_STYLE[styleKey] || { color: CHART_COLORS.gold, dash: [], name: styleKey };
             const pts = [];
             for (let i = 0; i < data.length; i++) {
                 const v = values[i];
-                if (v == null || Number.isNaN(v) || (!isRet && v === 0)) continue;
+                if (v == null || Number.isNaN(v) || (!isRet && v === 0)) continue;   // 0 = 该日窗口不足 4 年
                 pts.push({ x: data[i].time, y: isRet ? v * 100 : v });
             }
             if (!pts.length) return;
-            datasets.push({
+            out.push({
                 label: labelOverride || st.name, data: pts, borderColor: st.color, backgroundColor: st.color,
                 borderWidth: 1.4, borderDash: st.dash, pointRadius: 0, tension: 0,
                 yAxisID: 'y', parsing: false,
             });
         };
-
-        for (const key of Object.keys(result.series)) {
-            const s = result.series[key];
-            if (metric === 'ret') {
-                // 收益率是"该组参数整体"的结果，双均线不分快慢，故用序列自身名称
-                pushLine(s.mode === 'single' ? key : key + '_short', s.ret, true, s.label);
-            } else if (s.mode === 'single') {
-                pushLine(key, s.period, false);
-            } else {
-                pushLine(key + '_short', s.short, false);
-                pushLine(key + '_long', s.long, false);
-            }
+        if (metric === 'ret') {
+            // 收益率是「该组参数整体」的结果，双均线不分快慢，故用序列自身名称
+            pushLine(s.mode === 'single' ? s.key : s.key + '_short', s.ret, true, s.label + ' 最优收益率');
+        } else if (s.mode === 'single') {
+            pushLine(s.key, s.period, false);
+        } else {
+            pushLine(s.key + '_short', s.short, false);
+            pushLine(s.key + '_long', s.long, false);
         }
+        return out;
+    },
 
-        datasets.push({
-            label: 'BTC 收盘价', yAxisID: 'y2', parsing: false,
-            data: data.map((d) => ({ x: d.time, y: d.close })),
-            borderColor: CHART_COLORS.gray, backgroundColor: CHART_COLORS.gray,
-            borderWidth: 1, pointRadius: 0, tension: 0,
-        });
-
+    renderMainSplit(result, state) {
+        const data = DataModule.processedData;
+        const metric = state.metric === 'ret' ? 'ret' : 'period';
         const c = this.t();
-        this.charts.main = new Chart(el.getContext('2d'), {
-            type: 'line',
-            data: { datasets },
-            options: Object.assign({}, this.defaults(), {
-                plugins: Object.assign({}, this.defaults().plugins, {
-                    tooltip: Object.assign({}, this.defaults().plugins.tooltip, {
-                        callbacks: {
-                            title: (items) => (items.length ? new Date(items[0].parsed.x).toISOString().slice(0, 10) : ''),
-                            label: (item) => {
-                                const v = item.parsed.y;
-                                if (item.dataset.yAxisID === 'y2') return ` BTC ${fmtMoney(v)}`;
-                                return ` ${item.dataset.label}: ${metric === 'ret' ? v.toFixed(1) + '%' : v + ' 天'}`;
+
+        this.MAIN_CELLS.forEach((spec) => {
+            this.destroyChart(spec.id);
+            const el = document.getElementById(spec.id);
+            if (!el) return;
+            const cell = el.closest('.chart-cell');
+            const empty = cell ? cell.querySelector('.chart-empty') : null;
+            const s = result && result.series[spec.key];
+            const datasets = s ? this._seriesLines(s, metric, data) : [];
+
+            if (!datasets.length) {
+                // 该组合没算（配置里没勾）或窗口全都不足 4 年 —— 如实留白，不画空图
+                el.style.visibility = 'hidden';
+                if (empty) {
+                    empty.style.display = 'flex';
+                    empty.textContent = s ? '窗口不足 4 年，无可展示数据' : '未计算该组合：在上方配置里勾选后重新计算';
+                }
+                return;
+            }
+            el.style.visibility = '';
+            if (empty) empty.style.display = 'none';
+
+            datasets.push({
+                label: 'BTC 收盘价', yAxisID: 'y2', parsing: false,
+                data: data.map((d) => ({ x: d.time, y: d.close })),
+                borderColor: CHART_COLORS.gray, backgroundColor: CHART_COLORS.gray,
+                borderWidth: 1, pointRadius: 0, tension: 0,
+            });
+
+            // 语义下限：均线周期不可能为负；价格线性轴同理。收益率可以为负，不设下限。
+            const limits = metric === 'ret' ? undefined : { y: { min: 0 } };
+            const base = this.defaults(limits);
+            const chart = new Chart(el.getContext('2d'), {
+                type: 'line',
+                data: { datasets },
+                options: Object.assign({}, base, {
+                    plugins: Object.assign({}, base.plugins, {
+                        tooltip: Object.assign({}, base.plugins.tooltip, {
+                            callbacks: {
+                                title: (items) => (items.length ? new Date(items[0].parsed.x).toISOString().slice(0, 10) : ''),
+                                label: (item) => {
+                                    const v = item.parsed.y;
+                                    if (item.dataset.yAxisID === 'y2') return ` BTC ${fmtMoney(v)}`;
+                                    return ` ${item.dataset.label}: ${metric === 'ret' ? v.toFixed(1) + '%' : v + ' 天'}`;
+                                },
                             },
-                        },
+                        }),
                     }),
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: { unit: 'year' },
+                            ticks: { color: c.tick, maxTicksLimit: 8 },
+                            grid: { color: c.grid },
+                        },
+                        y: {
+                            type: 'linear',
+                            position: 'left',
+                            title: { display: true, text: metric === 'ret' ? '最优收益率 (%)' : '最优均线周期 (天)', color: c.tick },
+                            ticks: { color: c.tick, callback: metric === 'ret' ? fmtTickPct : fmtTick },
+                            grid: { color: c.grid },
+                        },
+                        y2: {
+                            type: state.priceLog ? 'logarithmic' : 'linear',
+                            position: 'right',
+                            title: { display: true, text: 'BTC 价格', color: CHART_COLORS.gray },
+                            ticks: { color: CHART_COLORS.gray, callback: (v) => fmtMoney(v) },
+                            grid: { drawOnChartArea: false },
+                        },
+                    },
                 }),
-                scales: {
-                    x: {
-                        type: 'time',
-                        time: { unit: 'year' },
-                        ticks: { color: c.tick, maxTicksLimit: 12 },
-                        grid: { color: c.grid },
-                    },
-                    y: {
-                        type: 'linear',
-                        position: 'left',
-                        title: { display: true, text: metric === 'ret' ? '窗口内最优策略收益率 (%)' : '窗口内最优均线周期 (天)', color: c.tick },
-                        ticks: { color: c.tick, callback: (v) => (metric === 'ret' ? v + '%' : v) },
-                        grid: { color: c.grid },
-                    },
-                    y2: {
-                        type: state.priceLog ? 'logarithmic' : 'linear',
-                        position: 'right',
-                        title: { display: true, text: 'BTC 价格', color: CHART_COLORS.gray },
-                        ticks: { color: CHART_COLORS.gray, callback: (v) => fmtMoney(v) },
-                        grid: { drawOnChartArea: false },
-                    },
-                },
-            }),
+            });
+            chart._floors = {
+                y: metric === 'ret' ? null : 0,
+                y2: state.priceLog ? 1 : 0,
+            };
+            this.charts[spec.id] = chart;
+            attachModifierZoom(chart, ['y', 'y2']);
         });
-        attachModifierZoom(this.charts.main, ['y', 'y2']);
     },
 
     // ------------------------------------------------------------------
@@ -330,14 +388,15 @@ const ChartsModule = {
             }
         });
 
+        const base = this.defaults(isRet ? undefined : { y: { min: 0 } });
         this.charts.cycle = new Chart(el.getContext('2d'), {
             type: 'line',
             data: { datasets },
-            options: Object.assign({}, this.defaults(), {
-                plugins: Object.assign({}, this.defaults().plugins, {
+            options: Object.assign({}, base, {
+                plugins: Object.assign({}, base.plugins, {
                     legend: { labels: { color: c.legend, font: { size: 11 }, filter: (it) => !it.text.includes('极值') } },
                     annotation: { annotations },
-                    tooltip: Object.assign({}, this.defaults().plugins.tooltip, {
+                    tooltip: Object.assign({}, base.plugins.tooltip, {
                         callbacks: {
                             title: (items) => (items.length ? `第 ${items[0].parsed.x} 天` : ''),
                             label: (item) => ` ${item.dataset.label}: ${isRet ? item.parsed.y.toFixed(1) + '%' : item.parsed.y + ' 天'}`,
@@ -348,19 +407,124 @@ const ChartsModule = {
                     x: {
                         type: 'linear',
                         title: { display: true, text: DataModule.ANCHOR_MODES[state.mode].xTitle, color: c.tick },
-                        ticks: { color: c.tick }, grid: { color: c.grid },
+                        ticks: { color: c.tick, callback: fmtTick }, grid: { color: c.grid },
                     },
                     y: {
                         type: 'linear',
                         title: { display: true, text: isRet ? '窗口内最优策略收益率 (%)' : '窗口内最优均线周期 (天)', color: c.tick },
-                        ticks: { color: c.tick, callback: (v) => (isRet ? v + '%' : v) },
+                        ticks: { color: c.tick, callback: isRet ? fmtTickPct : fmtTick },
                         grid: { color: c.grid },
                     },
                 },
             }),
         });
+        this.charts.cycle._floors = { y: isRet ? null : 0 };
         attachModifierZoom(this.charts.cycle, ['y']);
         return { cycles, sel, isRet };
+    },
+
+    // ------------------------------------------------------------------
+    // 自定义均线回测：价格 + 均线 + 买卖点（左轴），净值 vs 买入持有（右轴）
+    // sim 来自 RollingCore.simulate()，这里只负责画，不做任何计算
+    // ------------------------------------------------------------------
+    renderCustom(sim, state) {
+        this.destroyChart('custom');
+        const el = document.getElementById('custom-chart');
+        if (!el || !sim) return;
+        const data = DataModule.processedData;
+        const lo = sim.cfg.lo, hi = sim.cfg.hi;
+        const c = this.t();
+        const logMode = !!state.customLog;
+
+        const pricePts = [], bhPts = [];
+        const base = data[lo].close;
+        for (let i = lo; i <= hi; i++) {
+            pricePts.push({ x: data[i].time, y: data[i].close });
+            bhPts.push({ x: data[i].time, y: data[i].close / base });
+        }
+
+        const datasets = [{
+            label: 'BTC 收盘价', yAxisID: 'y', parsing: false, data: pricePts,
+            borderColor: CHART_COLORS.gray, backgroundColor: CHART_COLORS.gray,
+            borderWidth: 1, pointRadius: 0, tension: 0,
+        }];
+
+        const single = sim.cfg.mode === 'single';
+        const upper = sim.cfg.type === 'ema' ? 'EMA' : 'MA';
+        datasets.push({
+            label: `${upper}${sim.cfg.short}`, yAxisID: 'y', parsing: false, data: sim.maPts,
+            borderColor: CHART_COLORS.gold, backgroundColor: CHART_COLORS.gold,
+            borderWidth: 1.4, pointRadius: 0, tension: 0,
+        });
+        if (!single) {
+            datasets.push({
+                label: `${upper}${sim.cfg.long}`, yAxisID: 'y', parsing: false, data: sim.maPts2,
+                borderColor: CHART_COLORS.purple, backgroundColor: CHART_COLORS.purple,
+                borderWidth: 1.4, pointRadius: 0, tension: 0,
+            });
+        }
+
+        const buys = sim.trades.filter((t) => t.side === 'buy').map((t) => ({ x: t.time, y: t.price }));
+        const sells = sim.trades.filter((t) => t.side === 'sell').map((t) => ({ x: t.time, y: t.price }));
+        datasets.push({
+            label: `买入 (${buys.length})`, yAxisID: 'y', parsing: false, data: buys, showLine: false,
+            borderColor: '#065f46', backgroundColor: CHART_COLORS.green, borderWidth: 1,
+            pointRadius: 6, pointStyle: 'triangle',
+        });
+        datasets.push({
+            label: `卖出 (${sells.length})`, yAxisID: 'y', parsing: false, data: sells, showLine: false,
+            borderColor: '#7f1d1d', backgroundColor: CHART_COLORS.red, borderWidth: 1,
+            pointRadius: 6, pointStyle: 'triangle', rotation: 180,
+        });
+
+        datasets.push({
+            label: '策略净值', yAxisID: 'y2', parsing: false, data: sim.equity,
+            borderColor: CHART_COLORS.blue, backgroundColor: CHART_COLORS.blue,
+            borderWidth: 1.6, pointRadius: 0, tension: 0,
+        });
+        datasets.push({
+            label: '买入持有净值', yAxisID: 'y2', parsing: false, data: bhPts,
+            borderColor: CHART_COLORS.gray, backgroundColor: CHART_COLORS.gray,
+            borderWidth: 1, borderDash: [4, 3], pointRadius: 0, tension: 0,
+        });
+
+        const opt = this.defaults(logMode ? undefined : { y: { min: 0 }, y2: { min: 0 } });
+        const chart = new Chart(el.getContext('2d'), {
+            type: 'line',
+            data: { datasets },
+            options: Object.assign({}, opt, {
+                plugins: Object.assign({}, opt.plugins, {
+                    tooltip: Object.assign({}, opt.plugins.tooltip, {
+                        callbacks: {
+                            title: (items) => (items.length ? new Date(items[0].parsed.x).toISOString().slice(0, 10) : ''),
+                            label: (item) => {
+                                const v = item.parsed.y;
+                                if (item.dataset.yAxisID === 'y2') return ` ${item.dataset.label}: ${v.toFixed(2)}×`;
+                                return ` ${item.dataset.label}: ${fmtMoney(v)}`;
+                            },
+                        },
+                    }),
+                }),
+                scales: {
+                    x: { type: 'time', time: { unit: 'year' }, ticks: { color: c.tick, maxTicksLimit: 10 }, grid: { color: c.grid } },
+                    y: {
+                        type: logMode ? 'logarithmic' : 'linear', position: 'left',
+                        title: { display: true, text: 'BTC 价格 / 均线', color: c.tick },
+                        ticks: { color: c.tick, callback: (v) => fmtMoney(v) },
+                        grid: { color: c.grid },
+                    },
+                    y2: {
+                        type: logMode ? 'logarithmic' : 'linear', position: 'right',
+                        title: { display: true, text: '净值（起点 = 1）', color: CHART_COLORS.blue },
+                        ticks: { color: CHART_COLORS.blue, callback: (v) => fmtTick(v) + '×' },
+                        grid: { drawOnChartArea: false },
+                    },
+                },
+            }),
+        });
+        chart._floors = logMode ? { y: 1e-6, y2: 1e-6 } : { y: 0, y2: 0 };
+        this.charts.custom = chart;
+        attachModifierZoom(chart, ['y', 'y2']);
     },
 
     // 按下拉框的选择（"序列键:腿"）取出要画的那一条数组

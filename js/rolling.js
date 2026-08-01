@@ -190,6 +190,92 @@
     };
 
     // ========================================================================
+    // simulate：单组参数的逐笔回测（给「自定义均线回测」栏目用）
+    // ------------------------------------------------------------------------
+    // 与 bruteWindowReturn 同一套规则（满仓择时、按收盘价成交、每笔收单边手续费），
+    // 但额外记录每一笔买卖、净值曲线、最大回撤，供画买卖点与统计用。
+    // 均线用**全历史**计算后再截区间，等于让指标在区间开始前就已预热；
+    // 若区间起点处均线还没成形（历史不足），会如实返回 warmup 提示。
+    // ========================================================================
+    function simulate(closes0, times0, cfg0) {
+        const closes = closes0 instanceof Float64Array ? closes0 : Float64Array.from(closes0);
+        const times = times0 instanceof Float64Array ? times0 : Float64Array.from(times0);
+        const n = closes.length;
+        const cfg = Object.assign({
+            type: 'ma', mode: 'single',
+            period: 200, short: 50, long: 200,
+            feeRate: 0, lo: 0, hi: n - 1,
+        }, cfg0 || {});
+
+        const lo = Math.max(0, Math.min(n - 1, cfg.lo | 0));
+        const hi = Math.max(lo, Math.min(n - 1, cfg.hi | 0));
+        const fn = maFnOf(cfg.type);
+        const single = cfg.mode !== 'double';
+        const pShort = single ? Math.max(2, cfg.period | 0) : Math.max(2, cfg.short | 0);
+        const pLong = single ? 0 : Math.max(pShort + 1, cfg.long | 0);
+        const maA = fn(closes, pShort);
+        const maB = single ? null : fn(closes, pLong);
+        const fee = Math.max(0, cfg.feeRate || 0);
+
+        const trades = [];
+        const equity = [];          // [{x: time, y: 净值}]，起点 1
+        const maPts = [];           // [{x, y}] 快线（或单均线）
+        const maPts2 = [];          // 慢线
+        let cash = 1, coin = 0, entryCash = 0, entryPrice = 0, entryTime = 0;
+        let hold = 0, peak = 1, maxDD = 0, wins = 0, closed = 0;
+        let warmupMissing = 0;
+
+        for (let i = lo; i <= hi; i++) {
+            const price = closes[i], a = maA[i], b = maB ? maB[i] : NaN;
+            const ready = single ? (a === a) : (a === a && b === b);
+            if (!ready) warmupMissing++;
+            if (ready) {
+                if (single) { if (price > a) hold = 1; else if (price < a) hold = 0; }
+                else { if (a > b) hold = 1; else if (a < b) hold = 0; }
+            }
+            if (hold && cash > 0) {
+                entryCash = cash; entryPrice = price; entryTime = times[i];
+                coin = (cash * (1 - fee)) / price; cash = 0;
+                trades.push({ side: 'buy', time: times[i], index: i, price, ret: null });
+            } else if (!hold && coin > 0) {
+                const proceeds = coin * price * (1 - fee);
+                const r = entryCash > 0 ? proceeds / entryCash - 1 : null;
+                cash = proceeds; coin = 0;
+                trades.push({ side: 'sell', time: times[i], index: i, price, ret: r, heldDays: Math.round((times[i] - entryTime) / DAY_MS) });
+                closed++;
+                if (r > 0) wins++;
+            }
+            const eq = cash + coin * price;
+            equity.push({ x: times[i], y: eq });
+            if (eq > peak) peak = eq;
+            const dd = 1 - eq / peak;
+            if (dd > maxDD) maxDD = dd;
+            if (a === a) maPts.push({ x: times[i], y: a });
+            if (maB && b === b) maPts2.push({ x: times[i], y: b });
+        }
+
+        const finalEq = cash + coin * closes[hi];
+        const bh = closes[hi] / closes[lo] - 1;
+        return {
+            cfg: { type: cfg.type, mode: single ? 'single' : 'double', short: pShort, long: pLong, feeRate: fee, lo, hi },
+            label: (cfg.type === 'ema' ? 'EMA' : 'MA') + (single ? ` ${pShort}` : ` ${pShort}/${pLong} 金叉`),
+            trades, equity, maPts, maPts2,
+            ret: finalEq - 1,
+            bhRet: bh,
+            excess: (finalEq - 1) - bh,
+            finalEq,
+            maxDD,
+            tradeCount: trades.length,
+            roundTrips: closed,
+            winRate: closed ? wins / closed : null,
+            holdingNow: coin > 0,
+            warmupMissing,
+            startDate: new Date(times[lo]).toISOString().slice(0, 10),
+            endDate: new Date(times[hi]).toISOString().slice(0, 10),
+        };
+    }
+
+    // ========================================================================
     // createJob：把整轮寻优拆成可中断的小任务，调用方用 runFor(预算毫秒) 驱动。
     // Worker 里连续驱动并回报进度；无 Worker 时主线程分批驱动，页面不卡死。
     // ========================================================================
@@ -366,6 +452,7 @@
         sma, ema, maFnOf, periodRange,
         buildPosSingle, buildPosCross, scanSingle, scanCross,
         bruteWindowReturn, bruteWindowReturnCross,
+        simulate,
         createJob, transferables,
         SERIES_LABEL,
     };

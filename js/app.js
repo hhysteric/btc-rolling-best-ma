@@ -22,6 +22,9 @@ const AppState = {
     },
     result: null,
     computing: false,
+    // 自定义均线回测栏目
+    customLog: true,         // 价格 / 净值轴是否用对数
+    sim: null,               // RollingCore.simulate 的最近一次结果
 };
 
 const $ = (id) => document.getElementById(id);
@@ -166,10 +169,11 @@ function buildInsight(info, state) {
 // ---------------------------------------------------------------- 渲染
 function renderAll() {
     if (!AppState.result) return;
-    ChartsModule.renderMain(AppState.result, AppState);
+    ChartsModule.renderMainSplit(AppState.result, AppState);
     const info = ChartsModule.renderCycle(AppState.result, AppState);
     $('cycle-insight').textContent = buildInsight(info, AppState);
     syncControls();
+    if (AppState.sim) ChartsModule.renderCustom(AppState.sim, AppState);   // 主题/重绘时保留回测图
 }
 
 function syncControls() {
@@ -200,6 +204,121 @@ function renderFooter() {
     $('footer-meta').textContent = bits.join(' · ');
 }
 
+// ---------------------------------------------------------------- 自定义回测
+// 表单默认值：区间取全历史，周期取常用的 MA200。
+function initBacktest() {
+    const m = DataModule.meta;
+    if ($('bt-start') && !$('bt-start').value) $('bt-start').value = m.start;
+    if ($('bt-end') && !$('bt-end').value) $('bt-end').value = m.end;
+    if ($('bt-start')) { $('bt-start').min = m.start; $('bt-start').max = m.end; }
+    if ($('bt-end')) { $('bt-end').min = m.start; $('bt-end').max = m.end; }
+    syncBtMode();
+}
+
+// 单均线只需要一个周期，双均线需要快慢两个：按模式显示对应输入框
+function syncBtMode() {
+    const double = $('bt-mode') && $('bt-mode').value === 'double';
+    const show = (id, on) => { const el = $(id); if (el) el.style.display = on ? '' : 'none'; };
+    show('bt-period-wrap', !double);
+    show('bt-short-wrap', double);
+    show('bt-long-wrap', double);
+}
+
+// 日期 → 数据下标：取「不早于该日的第一根」/「不晚于该日的最后一根」，
+// 不存在则退到边界。绝不为了凑区间去插值。
+function indexForDate(str, side) {
+    const data = DataModule.processedData;
+    if (!data.length) return side === 'start' ? 0 : 0;
+    const t = Date.parse(str + 'T00:00:00Z');
+    if (!Number.isFinite(t)) return side === 'start' ? 0 : data.length - 1;
+    if (side === 'start') {
+        for (let i = 0; i < data.length; i++) if (data[i].time >= t) return i;
+        return data.length - 1;
+    }
+    for (let i = data.length - 1; i >= 0; i--) if (data[i].time <= t) return i;
+    return 0;
+}
+
+function runBacktest() {
+    const data = DataModule.processedData;
+    if (!data.length) return;
+    const num = (id, dflt) => {
+        const el = $(id);
+        const v = el ? parseFloat(el.value) : NaN;
+        return Number.isFinite(v) ? v : dflt;
+    };
+    let lo = indexForDate($('bt-start').value, 'start');
+    let hi = indexForDate($('bt-end').value, 'end');
+    if (hi <= lo) { hi = Math.min(data.length - 1, lo + 1); }
+
+    const mode = $('bt-mode').value === 'double' ? 'double' : 'single';
+    const cfg = {
+        type: $('bt-type').value === 'ema' ? 'ema' : 'ma',
+        mode,
+        period: Math.max(2, Math.round(num('bt-period', 200))),
+        short: Math.max(2, Math.round(num('bt-short', 50))),
+        long: Math.max(3, Math.round(num('bt-long', 200))),
+        feeRate: Math.max(0, Math.min(0.01, num('bt-fee', 0) / 100)),
+        lo, hi,
+    };
+    if (mode === 'double' && cfg.long <= cfg.short) cfg.long = cfg.short + 1;   // 慢线必须比快线慢
+
+    const sim = RollingCore.simulate(DataModule.closes(), DataModule.times(), cfg);
+    AppState.sim = sim;
+    const empty = $('custom-empty');
+    if (empty) empty.style.display = 'none';
+    ChartsModule.renderCustom(sim, AppState);
+    renderBtStats(sim);
+    renderBtTrades(sim);
+}
+
+function renderBtStats(sim) {
+    const el = $('bt-stats');
+    if (!el) return;
+    const sgn = (v) => (v > 0 ? 'pos' : (v < 0 ? 'neg' : ''));
+    const cell = (label, value, cls) =>
+        `<div class="stat"><div class="stat-label">${label}</div><div class="stat-value ${cls || ''}">${value}</div></div>`;
+    const bits = [
+        cell('参数', sim.label),
+        cell('区间', `${sim.startDate} ~ ${sim.endDate}`),
+        cell('策略收益率', fmtPct(sim.ret), sgn(sim.ret)),
+        cell('买入持有', fmtPct(sim.bhRet), sgn(sim.bhRet)),
+        cell('超额', fmtPct(sim.excess), sgn(sim.excess)),
+        cell('净值', sim.finalEq.toFixed(2) + '×'),
+        cell('最大回撤', fmtPct(-sim.maxDD), 'neg'),
+        cell('成交笔数', `${sim.tradeCount}（完整回合 ${sim.roundTrips}）`),
+        cell('回合胜率', sim.winRate == null ? '-' : fmtPct(sim.winRate)),
+        cell('当前状态', sim.holdingNow ? '持币' : '空仓'),
+    ];
+    let html = `<div class="stat-grid">${bits.join('')}</div>`;
+    if (sim.warmupMissing > 0) {
+        html += `<p class="note warn">区间开头有 ${sim.warmupMissing} 天均线还没成形（历史长度不足该周期），这些天按空仓处理，不做任何补值。</p>`;
+    }
+    el.innerHTML = html;
+}
+
+function renderBtTrades(sim) {
+    const el = $('bt-trades');
+    if (!el) return;
+    if (!sim.trades.length) {
+        el.innerHTML = '<p class="muted">该区间内没有产生任何买卖信号。</p>';
+        return;
+    }
+    // 只列最近 40 笔，避免长区间把页面拉得过长；完整清单可在控制台取 AppState.sim.trades
+    const list = sim.trades.slice(-40).reverse();
+    const rows = list.map((t) => {
+        const d = new Date(t.time).toISOString().slice(0, 10);
+        const side = t.side === 'buy' ? '<span class="tag buy">买入</span>' : '<span class="tag sell">卖出</span>';
+        const ret = t.ret == null ? '' : `<span class="${t.ret > 0 ? 'pos' : (t.ret < 0 ? 'neg' : '')}">${fmtPct(t.ret)}</span>`;
+        return `<tr><td>${d}</td><td>${side}</td><td class="num">${fmtMoney(t.price)}</td><td class="num">${ret}</td><td class="num">${t.heldDays == null ? '' : t.heldDays + ' 天'}</td></tr>`;
+    });
+    el.innerHTML = `
+        <table class="mini-table trades"><thead>
+            <tr><th>日期</th><th>方向</th><th>成交价</th><th>本回合收益</th><th>持有天数</th></tr>
+        </thead><tbody>${rows.join('')}</tbody></table>
+        <p class="muted sm">共 ${sim.trades.length} 笔，上表只显示最近 ${list.length} 笔（倒序）。</p>`;
+}
+
 // ---------------------------------------------------------------- 交互绑定
 function bindControls() {
     document.querySelectorAll('[data-metric]').forEach((b) => {
@@ -224,7 +343,20 @@ function bindControls() {
         renderAll();
     });
     document.querySelectorAll('[data-reset]').forEach((b) => {
-        b.addEventListener('click', () => ChartsModule.resetZoom(b.dataset.reset));
+        b.addEventListener('click', () => {
+            if (b.dataset.reset === 'main-all') {
+                ChartsModule.MAIN_CELLS.forEach((s) => ChartsModule.resetZoom(s.id));
+                return;
+            }
+            ChartsModule.resetZoom(b.dataset.reset);
+        });
+    });
+    if ($('bt-mode')) $('bt-mode').addEventListener('change', syncBtMode);
+    if ($('btn-backtest')) $('btn-backtest').addEventListener('click', () => runBacktest());
+    if ($('btn-bt-log')) $('btn-bt-log').addEventListener('click', () => {
+        AppState.customLog = !AppState.customLog;
+        $('btn-bt-log').textContent = AppState.customLog ? '纵轴：对数' : '纵轴：线性';
+        if (AppState.sim) ChartsModule.renderCustom(AppState.sim, AppState);
     });
     document.querySelectorAll('[data-full]').forEach((b) => {
         b.addEventListener('click', () => {
@@ -328,6 +460,7 @@ async function init() {
     }
     renderFooter();
     bindControls();
+    initBacktest();
     await runCompute();
 }
 

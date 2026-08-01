@@ -137,9 +137,72 @@ main { max-width: 1440px; margin: 0 auto; padding: 18px 20px 40px; }
     position: relative; height: 460px;
     background: var(--panel); border-radius: 10px;
 }
+.chart-box.sm { height: 320px; }
 .chart-box.fullscreen {
     position: fixed; inset: 0; z-index: 60; height: 100vh;
     padding: 20px; border-radius: 0;
+}
+
+/* 四张图的 2×2 网格（单 MA / 双 MA / 单 EMA / 双 EMA） */
+.chart-grid {
+    display: grid; gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+}
+.chart-cell {
+    border: 1px solid var(--border); border-radius: 10px;
+    padding: 8px 10px 10px; background: var(--panel);
+}
+.cell-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 8px; margin-bottom: 4px;
+}
+.cell-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.cell-btns { display: flex; gap: 5px; }
+.btn.xs { padding: 2px 7px; font-size: 11.5px; }
+
+/* 未计算 / 无数据时压在画布上的说明层：留白也要说清原因，不画空图 */
+.chart-empty {
+    position: absolute; inset: 0; display: flex;
+    align-items: center; justify-content: center; text-align: center;
+    padding: 0 24px; color: var(--muted); font-size: 12.5px;
+}
+
+/* -------------------------------------------------------- 回测统计与成交表 */
+.ctrls.right { justify-content: flex-end; margin: 8px 0; }
+.stat-grid {
+    display: grid; gap: 8px;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    margin: 12px 0 4px;
+}
+.stat {
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 9px; padding: 7px 10px;
+}
+.stat-label { color: var(--muted); font-size: 11.5px; }
+.stat-value { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.stat-value.pos { color: var(--green); }
+.stat-value.neg { color: var(--red); }
+.note.warn { color: var(--gold); }
+.pos { color: var(--green); }
+.neg { color: var(--red); }
+
+.mini-table.trades { margin-top: 12px; }
+.mini-table.trades td, .mini-table.trades th { padding: 4px 8px; }
+.tag {
+    display: inline-block; padding: 0 6px; border-radius: 5px;
+    font-size: 11.5px; color: #fff;
+}
+.tag.buy { background: var(--green); }
+.tag.sell { background: var(--red); }
+.select {
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 5px 8px; font-size: 13px; font-family: inherit;
+}
+.cfg-grid input[type="date"] {
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 5px 8px; font-size: 13px; font-family: inherit; width: 100%;
 }
 .note { color: var(--text-2); font-size: 12.5px; margin: 10px 0 0; }
 .note.muted, .muted { color: var(--muted); }
@@ -189,6 +252,8 @@ footer p { margin: 4px 0; }
 
 @media (max-width: 720px) {
     .chart-box { height: 360px; }
+    .chart-box.sm { height: 280px; }
+    .chart-grid { grid-template-columns: 1fr; }
     .card.wide { grid-column: span 1; }
     main { padding: 14px 12px 32px; }
 }
