@@ -83,6 +83,7 @@
                 <button class="btn seg-btn" data-metric="ret">最优策略收益率</button>
             </span>
             <button id="btn-price-log" class="btn">价格：对数</button>
+            <button id="btn-export-ma" class="btn">导出单 MA 结果（Excel）</button>
             <button class="btn" data-reset="main-all">重置缩放</button>
         </div>
     </div>
@@ -217,7 +218,8 @@
     <p class="note" id="cycle-insight">计算中…</p>
     <p class="note muted">
         横轴为「距该轮锚点的天数」，四轮曲线叠在同一坐标里比较相同周期位置上的最优参数。
-        三角形标记为该轮极大值，菱形标记为本轮最新位置。
+        图例括号里是该轮锚点的真实年月（由数据定出来的那一天）。菱形标记为本轮最新位置；
+        不标各轮极值——最优周期是逐日回看寻优的结果，「某轮最高」并不构成参考位，极值数字见上方段落。
         <span id="cycle-leg-note">收益率口径下双均线只有一条曲线（快慢线共用同一收益率）。</span>
     </p>
 </section>
@@ -264,6 +266,7 @@
 })();
 </script>
 <script src="js/rolling.js"></script>
+<script src="js/cache.js"></script>
 <script src="js/data.js"></script>
 <script src="js/charts.js"></script>
 <script src="js/app.js"></script>

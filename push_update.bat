@@ -15,7 +15,7 @@ cd /d "%~dp0"
 set GIT_EDITOR=true
 
 set MSG=%~1
-if "%MSG%"=="" set MSG=feat: split rolling series into 4 charts, add custom MA backtest, fix axis ticks
+if "%MSG%"=="" set MSG=feat: full-width charts, xlsx export, result cache; cycle legend shows anchor year.month
 
 echo ===========================================================
 echo   commit + sync + push   btc-rolling-best-ma

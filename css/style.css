@@ -137,16 +137,17 @@ main { max-width: 1440px; margin: 0 auto; padding: 18px 20px 40px; }
     position: relative; height: 460px;
     background: var(--panel); border-radius: 10px;
 }
-.chart-box.sm { height: 320px; }
+.chart-box.sm { height: 460px; }   /* 四张主图与其它图同高，不做缩略 */
 .chart-box.fullscreen {
     position: fixed; inset: 0; z-index: 60; height: 100vh;
     padding: 20px; border-radius: 0;
 }
 
-/* 四张图的 2×2 网格（单 MA / 双 MA / 单 EMA / 双 EMA） */
+/* 四张图纵向堆叠，每张都是通版大图（单 MA / 双 MA / 单 EMA / 双 EMA）。
+   曾经用 2×2 网格，但缩略尺寸下参数漂移的细节看不清，改成一列一张。 */
 .chart-grid {
-    display: grid; gap: 12px;
-    grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+    display: grid; gap: 14px;
+    grid-template-columns: 1fr;
 }
 .chart-cell {
     border: 1px solid var(--border); border-radius: 10px;
@@ -252,8 +253,7 @@ footer p { margin: 4px 0; }
 
 @media (max-width: 720px) {
     .chart-box { height: 360px; }
-    .chart-box.sm { height: 280px; }
-    .chart-grid { grid-template-columns: 1fr; }
+    .chart-box.sm { height: 360px; }
     .card.wide { grid-column: span 1; }
     main { padding: 14px 12px 32px; }
 }

@@ -25,7 +25,12 @@ const AppState = {
     // 自定义均线回测栏目
     customLog: true,         // 价格 / 净值轴是否用对数
     sim: null,               // RollingCore.simulate 的最近一次结果
+    cacheNote: '',           // 页脚如实标注结果是缓存还是刚算的
 };
+
+// cache.js 万一没加载成功，退化成"每次都算"而不是让整页挂掉
+const Cache = (typeof RollingCache !== 'undefined') ? RollingCache
+    : { load: () => null, save: () => false, sizeKB: () => 0, clear() {} };
 
 const $ = (id) => document.getElementById(id);
 const fmtInt = (v) => (v == null || Number.isNaN(v) ? '-' : Math.round(v).toLocaleString('en-US'));
@@ -201,7 +206,128 @@ function renderFooter() {
     const bits = [`数据 ${m.start} ~ ${m.end}（${fmtInt(m.count)} 天，来源 ${m.source}）`];
     if (m.appended) bits.push(`Binance 已补最新 ${m.appended} 天`);
     if (m.fillError) bits.push(`补新未成功：${m.fillError}，页面数据截止到 ${m.end}`);
+    if (AppState.cacheNote) bits.push(AppState.cacheNote);
     $('footer-meta').textContent = bits.join(' · ');
+}
+
+// ---------------------------------------------------------------- 结果导出
+// 单 MA（ma_single）序列导出成 Excel。优先写真正的 .xlsx（按需从 CDN 取 SheetJS），
+// 取不到就退回 UTF-8 BOM 的 CSV —— Excel 双击同样能正常打开，不会因为没网就导不出。
+function exportRows(result) {
+    const s = result && result.series.ma_single;
+    if (!s) return null;
+    const data = DataModule.processedData;
+    const rows = [];
+    const n = Math.min(data.length, s.ret.length);
+    for (let i = 0; i < n; i++) {
+        const r = s.ret[i];
+        if (r == null || Number.isNaN(r)) continue;          // 窗口不足 4 年的日子如实跳过
+        rows.push({
+            日期: data[i].dateStr,
+            收盘价: data[i].close,
+            最优MA周期天: s.period ? s.period[i] : null,
+            窗口收益率: r,                                    // 小数，Excel 里套百分比格式
+            窗口收益率百分比: r * 100,
+        });
+    }
+    return rows;
+}
+
+function loadScriptOnce(src) {
+    if (window.__loadedScripts && window.__loadedScripts[src]) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+        const el = document.createElement('script');
+        el.src = src;
+        el.onload = () => {
+            window.__loadedScripts = window.__loadedScripts || {};
+            window.__loadedScripts[src] = true;
+            resolve();
+        };
+        el.onerror = () => reject(new Error('脚本加载失败：' + src));
+        document.head.appendChild(el);
+    });
+}
+
+function downloadBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+function csvFallback(rows, base) {
+    const head = ['日期', '收盘价', '最优MA周期(天)', '窗口收益率(小数)', '窗口收益率(%)'];
+    const lines = [head.join(',')];
+    for (const r of rows) {
+        lines.push([r.日期, r.收盘价, r.最优MA周期天, r.窗口收益率, r.窗口收益率百分比.toFixed(4)].join(','));
+    }
+    // 前置 BOM 让 Excel 认出 UTF-8，否则中文表头会乱码
+    const BOM = String.fromCharCode(0xFEFF);
+    downloadBlob(new Blob([BOM + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' }), base + '.csv');
+}
+
+async function exportSingleMA() {
+    const btn = $('btn-export-ma');
+    const result = AppState.result;
+    const rows = exportRows(result);
+    if (!rows || !rows.length) {
+        if (btn) { btn.textContent = '无可导出数据'; setTimeout(() => (btn.textContent = '导出单 MA 结果（Excel）'), 2200); }
+        return;
+    }
+    const m = DataModule.meta;
+    const cfg = result.cfg || AppState.cfg;
+    const base = `4Y-Rolling-Best-MA_单MA_${m.start}_${m.end}`;
+    const setLabel = (t) => { if (btn) btn.textContent = t; };
+    const restore = () => setTimeout(() => setLabel('导出单 MA 结果（Excel）'), 2200);
+
+    setLabel('导出中…');
+    try {
+        await loadScriptOnce('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js');
+        if (!window.XLSX) throw new Error('XLSX 未就绪');
+        const XLSX = window.XLSX;
+        const wb = XLSX.utils.book_new();
+
+        const sheet = XLSX.utils.json_to_sheet(rows, {
+            header: ['日期', '收盘价', '最优MA周期天', '窗口收益率', '窗口收益率百分比'],
+        });
+        // 表头改成带单位的中文，并给收益率列套百分比格式
+        XLSX.utils.sheet_add_aoa(sheet, [['日期', '收盘价(USD)', '最优MA周期(天)', '窗口收益率', '窗口收益率(%)']], { origin: 'A1' });
+        sheet['!cols'] = [{ wch: 12 }, { wch: 12 }, { wch: 16 }, { wch: 14 }, { wch: 14 }];
+        for (let i = 2; i <= rows.length + 1; i++) {
+            const cell = sheet['D' + i];
+            if (cell) cell.z = '0.00%';
+        }
+        XLSX.utils.book_append_sheet(wb, sheet, '单MA最优周期');
+
+        const info = [
+            ['指标', '4Y Rolling Best MA（单均线 MA）'],
+            ['定义', '对每一根日线回看 4 年窗口，在周期网格内穷举所有 MA 周期，记录该窗口内最赚钱的周期及其收益率'],
+            ['交易规则', '满仓择时：收盘价 > MA 持币，收盘价 < MA 空仓；按当日收盘价成交，每笔收一次单边手续费'],
+            ['窗口长度', `${result.windowYears} 年（允许 5% 容差，不足则该日无值，表中已跳过）`],
+            ['周期网格', `${cfg.periodMin} ~ ${cfg.periodMax}，步长 ${cfg.periodStep}`],
+            ['单边手续费', `${((cfg.feeRate || 0) * 100).toFixed(3)}%`],
+            ['行情区间', `${m.start} ~ ${m.end}（${m.count} 天）`],
+            ['数据来源', m.source],
+            ['导出时间', new Date().toISOString().slice(0, 19).replace('T', ' ') + ' UTC'],
+            ['有效行数', String(rows.length)],
+            ['说明', '窗口收益率是「事后回看」的最优参数收益，不代表可实盘复现的收益；空缺的日子表示历史不足 4 年，未做任何插值或估算'],
+        ];
+        const infoSheet = XLSX.utils.aoa_to_sheet([['项目', '内容']].concat(info));
+        infoSheet['!cols'] = [{ wch: 14 }, { wch: 96 }];
+        XLSX.utils.book_append_sheet(wb, infoSheet, '说明');
+
+        const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+        downloadBlob(new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), base + '.xlsx');
+        setLabel(`已导出 ${fmtInt(rows.length)} 行`);
+    } catch (e) {
+        // 没网 / CDN 被拦：退回 CSV，并如实说明换了格式
+        csvFallback(rows, base);
+        setLabel('已导出 CSV（xlsx 库取不到）');
+    }
+    restore();
 }
 
 // ---------------------------------------------------------------- 自定义回测
@@ -379,6 +505,7 @@ function bindControls() {
         renderAll();
     });
     $('btn-recompute').addEventListener('click', () => runCompute());
+    if ($('btn-export-ma')) $('btn-export-ma').addEventListener('click', () => exportSingleMA());
     window.addEventListener('resize', () => ChartsModule.resizeAll());
 }
 
@@ -403,23 +530,44 @@ function readCfgFromForm() {
     });
 }
 
-async function runCompute() {
+// background = true：页面已经用缓存结果出图了，这次只是把新增的几天补算上，
+// 所以不弹遮罩、不打断浏览，进度写在页脚。
+async function runCompute(opts) {
+    const o = opts || {};
     if (AppState.computing) return;
     AppState.computing = true;
     AppState.cfg = readCfgFromForm();
-    showLoading(true);
-    setProgress(0.01, '准备计算…');
+    if (!o.background) {
+        showLoading(true);
+        setProgress(0.01, '准备计算…');
+    }
     try {
         const result = await computeAsync(AppState.cfg, (frac, label) => {
-            setProgress(frac, `${label} 寻优中… ${(frac * 100).toFixed(0)}%`);
+            if (o.background) {
+                AppState.cacheNote = `后台补算至 ${DataModule.meta.end}… ${(frac * 100).toFixed(0)}%`;
+                renderFooter();
+            } else {
+                setProgress(frac, `${label} 寻优中… ${(frac * 100).toFixed(0)}%`);
+            }
         });
         AppState.result = result;
+        const saved = Cache.save(result, AppState.cfg, DataModule.meta);
+        AppState.cacheNote = saved
+            ? `结果已缓存（${Cache.sizeKB()}KB），配置与数据不变时下次进站直接出图`
+            : '本地缓存不可用（配额或隐私模式），下次进站会重新计算';
         fillSeriesSelect(result);
         renderOverview(result);
         renderAll();
+        renderFooter();
         showLoading(false);
     } catch (e) {
-        showError(`计算失败：${(e && e.message) || e}`);
+        if (o.background) {
+            // 后台补算失败不能影响已经可用的页面：如实说明页面上是缓存值
+            AppState.cacheNote = `后台补算失败（${(e && e.message) || e}），当前展示的是缓存结果`;
+            renderFooter();
+        } else {
+            showError(`计算失败：${(e && e.message) || e}`);
+        }
     } finally {
         AppState.computing = false;
     }
@@ -461,6 +609,27 @@ async function init() {
     renderFooter();
     bindControls();
     initBacktest();
+
+    // 先查本地缓存：配置与数据指纹都没变就直接出图，不重算（这是"每次进站不用等"的关键）。
+    AppState.cfg = readCfgFromForm();
+    const hit = Cache.load(AppState.cfg, DataModule.meta);
+    if (hit) {
+        AppState.result = hit.result;
+        fillSeriesSelect(hit.result);
+        renderOverview(hit.result);
+        renderAll();
+        showLoading(false);
+        if (hit.fresh) {
+            AppState.cacheNote = `结果取自本地缓存（${String(hit.savedAt).slice(0, 10)} 存，${Cache.sizeKB()}KB），未重算`;
+            renderFooter();
+        } else {
+            // 数据后来长了几天：先把缓存结果摆出来，再后台补算，绝不拿旧值冒充最新
+            AppState.cacheNote = `缓存结果算到 ${hit.cachedEnd}，正在后台补算到 ${DataModule.meta.end}…`;
+            renderFooter();
+            runCompute({ background: true });
+        }
+        return;
+    }
     await runCompute();
 }
 

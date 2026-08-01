@@ -351,24 +351,9 @@ const ChartsModule = {
                 borderColor: color, backgroundColor: color,
                 borderWidth: 1.6, pointRadius: 0, tension: 0.1,
             });
-            // 标注该轮的极大值（最优周期最长 / 收益率最高的时点）
-            let hi = cy.data[0];
-            for (const p of cy.data) if (p.y > hi.y) hi = p;
-            const hiY = isRet ? hi.y * 100 : hi.y;
-            datasets.push({
-                label: cy.label + ' 极值', parsing: false,
-                data: [{ x: hi.day, y: hiY }],
-                borderColor: color, backgroundColor: color,
-                pointRadius: 6, pointStyle: 'triangle', showLine: false,
-            });
-            annotations['hi' + i] = {
-                type: 'label', xValue: hi.day, yValue: hiY,
-                content: `${cy.label.replace(/ .*/, '')}: ${isRet ? hiY.toFixed(0) + '%' : hi.y + '天'} (第${hi.day}天)`,
-                color: '#fff', font: { size: 10, weight: 'bold' }, position: 'center',
-                xAdjust: -38, yAdjust: 8 + i * 16,
-                backgroundColor: color, borderRadius: 3, padding: 3,
-            };
-            // 当前进行中的这一轮，额外标出最新值所处位置
+            // 不标各轮极大值：最优周期是每天回看寻优的结果，"某轮最高"既不构成阻力位，
+            // 对进行中的这一轮还常常落在第 0 天，标出来只是噪声。需要极值看下方文字段落。
+            // 当前进行中的这一轮，仍标出最新值所处位置（这是"我们现在在哪"的定位）
             if (i === cycles.length - 1) {
                 const last = cy.data[cy.data.length - 1];
                 const lastY = isRet ? last.y * 100 : last.y;

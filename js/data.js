@@ -176,18 +176,23 @@ const DataModule = {
 
     // 各轮"顶"所在的检索区间（在区间内取最高收盘价）
     PEAK_RANGES: [
-        { start: '2011-01-01', end: '2015-01-01', label: '周期1 (2013顶)' },
-        { start: '2015-01-01', end: '2019-01-01', label: '周期2 (2017顶)' },
-        { start: '2019-01-01', end: '2023-01-01', label: '周期3 (2021顶)' },
-        { start: '2023-01-01', end: '2027-01-01', label: '周期4 (当前)' },
+        { start: '2011-01-01', end: '2015-01-01', name: '周期1' },
+        { start: '2015-01-01', end: '2019-01-01', name: '周期2' },
+        { start: '2019-01-01', end: '2023-01-01', name: '周期3' },
+        { start: '2023-01-01', end: '2027-01-01', name: '周期4' },
     ],
     // 各轮"熊市大底"的检索区间（右界比顶部区间后移半年，覆盖跨年的大底）
     TROUGH_RANGES: [
-        { start: '2011-01-01', end: '2015-07-01', label: '周期1 (2015底)' },
-        { start: '2015-01-01', end: '2019-07-01', label: '周期2 (2018底)' },
-        { start: '2019-01-01', end: '2023-07-01', label: '周期3 (2022底)' },
-        { start: '2023-01-01', end: '2027-01-01', label: '周期4 (当前)' },
+        { start: '2011-01-01', end: '2015-07-01', name: '周期1' },
+        { start: '2015-01-01', end: '2019-07-01', name: '周期2' },
+        { start: '2019-01-01', end: '2023-07-01', name: '周期3' },
+        { start: '2023-01-01', end: '2027-01-01', name: '周期4' },
     ],
+
+    // 图例里括号内显示锚点的真实年月（由数据定出来的那一天，不是区间边界）
+    ymLabel(date) {
+        return `${date.getUTCFullYear()}.${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+    },
 
     /**
      * 取某种对齐口径下的各轮锚点。
@@ -206,7 +211,7 @@ const DataModule = {
                 const idx = d.findIndex((x) => x.date >= start && x.date < end);
                 if (idx < 0) continue;
                 out.push({
-                    label: `减半${c + 1} (${start.getUTCFullYear()})`,
+                    label: `减半${c + 1} (${this.ymLabel(d[idx].date)})`,
                     anchorIndex: idx,
                     anchorDate: d[idx].date,
                     anchorPrice: d[idx].close,
@@ -217,7 +222,8 @@ const DataModule = {
         }
 
         const ranges = mode === 'trough' ? this.TROUGH_RANGES : this.PEAK_RANGES;
-        for (const r of ranges) {
+        for (let ri = 0; ri < ranges.length; ri++) {
+            const r = ranges[ri];
             const start = new Date(r.start), end = new Date(r.end);
             let lo = -1, hi = -1;
             for (let i = 0; i < d.length; i++) {
@@ -234,8 +240,10 @@ const DataModule = {
                 for (let i = peak + 1; i <= hi; i++) if (d[i].close < d[trough].close) trough = i;
                 anchor = trough;
             }
+            // 最后一轮还在进行中：锚点会随数据推进而移动，如实标注「当前」
+            const isLast = ri === ranges.length - 1;
             out.push({
-                label: r.label,
+                label: `${r.name} (${this.ymLabel(d[anchor].date)}${isLast ? '，当前' : ''})`,
                 anchorIndex: anchor,
                 anchorDate: d[anchor].date,
                 anchorPrice: d[anchor].close,
