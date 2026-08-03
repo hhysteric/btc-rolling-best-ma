@@ -211,24 +211,28 @@ function renderFooter() {
 }
 
 // ---------------------------------------------------------------- 结果导出
-// 单 MA（ma_single）序列导出成 Excel。优先写真正的 .xlsx（按需从 CDN 取 SheetJS），
+// 四条序列都能导出成 Excel。优先写真正的 .xlsx（按需从 CDN 取 SheetJS），
 // 取不到就退回 UTF-8 BOM 的 CSV —— Excel 双击同样能正常打开，不会因为没网就导不出。
-function exportRows(result) {
-    const s = result && result.series.ma_single;
+// 单均线一列「最优周期」，双均线两列「最优快线 / 最优慢线」，结构随序列自适应。
+function exportRows(s) {
     if (!s) return null;
     const data = DataModule.processedData;
+    const single = s.mode === 'single';
     const rows = [];
     const n = Math.min(data.length, s.ret.length);
     for (let i = 0; i < n; i++) {
         const r = s.ret[i];
         if (r == null || Number.isNaN(r)) continue;          // 窗口不足 4 年的日子如实跳过
-        rows.push({
-            日期: data[i].dateStr,
-            收盘价: data[i].close,
-            最优MA周期天: s.period ? s.period[i] : null,
-            窗口收益率: r,                                    // 小数，Excel 里套百分比格式
-            窗口收益率百分比: r * 100,
-        });
+        const row = { 日期: data[i].dateStr, 收盘价: data[i].close };
+        if (single) {
+            row.最优周期天 = s.period ? s.period[i] : null;
+        } else {
+            row.最优快线天 = s.short ? s.short[i] : null;
+            row.最优慢线天 = s.long ? s.long[i] : null;
+        }
+        row.窗口收益率 = r;                                  // 小数，Excel 里套百分比格式
+        row.窗口收益率百分比 = r * 100;
+        rows.push(row);
     }
     return rows;
 }
@@ -258,30 +262,51 @@ function downloadBlob(blob, filename) {
     setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 
-function csvFallback(rows, base) {
-    const head = ['日期', '收盘价', '最优MA周期(天)', '窗口收益率(小数)', '窗口收益率(%)'];
+function csvFallback(rows, base, single) {
+    const head = single
+        ? ['日期', '收盘价', '最优周期(天)', '窗口收益率(小数)', '窗口收益率(%)']
+        : ['日期', '收盘价', '最优快线(天)', '最优慢线(天)', '窗口收益率(小数)', '窗口收益率(%)'];
     const lines = [head.join(',')];
     for (const r of rows) {
-        lines.push([r.日期, r.收盘价, r.最优MA周期天, r.窗口收益率, r.窗口收益率百分比.toFixed(4)].join(','));
+        const cells = single
+            ? [r.日期, r.收盘价, r.最优周期天, r.窗口收益率, r.窗口收益率百分比.toFixed(4)]
+            : [r.日期, r.收盘价, r.最优快线天, r.最优慢线天, r.窗口收益率, r.窗口收益率百分比.toFixed(4)];
+        lines.push(cells.join(','));
     }
     // 前置 BOM 让 Excel 认出 UTF-8，否则中文表头会乱码
     const BOM = String.fromCharCode(0xFEFF);
     downloadBlob(new Blob([BOM + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' }), base + '.csv');
 }
 
-async function exportSingleMA() {
-    const btn = $('btn-export-ma');
+// 四条序列的短名，进文件名（避免中文/括号在某些系统上出问题）
+const EXPORT_TAG = {
+    ma_single: '单MA', ma_double: '双MA金叉',
+    ema_single: '单EMA', ema_double: '双EMA金叉',
+};
+
+// 把一条序列（key = ma_single / ma_double / ema_single / ema_double）导出成 Excel。
+// btn 用来就地反馈进度；成功后恢复它原来的文字。
+async function exportSeries(key, btn) {
     const result = AppState.result;
-    const rows = exportRows(result);
-    if (!rows || !rows.length) {
-        if (btn) { btn.textContent = '无可导出数据'; setTimeout(() => (btn.textContent = '导出单 MA 结果（Excel）'), 2200); }
-        return;
+    const s = result && result.series[key];
+    const defaultLabel = btn ? btn.textContent : '';
+    const setLabel = (t) => { if (btn) btn.textContent = t; };
+    const restore = () => { if (btn) setTimeout(() => setLabel(defaultLabel), 2200); };
+
+    if (!s) {
+        setLabel('该组合未计算'); restore(); return;
     }
+    const rows = exportRows(s);
+    if (!rows || !rows.length) {
+        setLabel('无可导出数据'); restore(); return;
+    }
+    const single = s.mode === 'single';
     const m = DataModule.meta;
     const cfg = result.cfg || AppState.cfg;
-    const base = `4Y-Rolling-Best-MA_单MA_${m.start}_${m.end}`;
-    const setLabel = (t) => { if (btn) btn.textContent = t; };
-    const restore = () => setTimeout(() => setLabel('导出单 MA 结果（Excel）'), 2200);
+    const tag = EXPORT_TAG[key] || key;
+    const base = `4Y-Rolling-Best-MA_${tag}_${m.start}_${m.end}`;
+    const typeName = s.type === 'ema' ? 'EMA' : 'MA';
+    const modeName = single ? '单均线' : '双均线（金叉）';
 
     setLabel('导出中…');
     try {
@@ -290,22 +315,34 @@ async function exportSingleMA() {
         const XLSX = window.XLSX;
         const wb = XLSX.utils.book_new();
 
-        const sheet = XLSX.utils.json_to_sheet(rows, {
-            header: ['日期', '收盘价', '最优MA周期天', '窗口收益率', '窗口收益率百分比'],
-        });
-        // 表头改成带单位的中文，并给收益率列套百分比格式
-        XLSX.utils.sheet_add_aoa(sheet, [['日期', '收盘价(USD)', '最优MA周期(天)', '窗口收益率', '窗口收益率(%)']], { origin: 'A1' });
-        sheet['!cols'] = [{ wch: 12 }, { wch: 12 }, { wch: 16 }, { wch: 14 }, { wch: 14 }];
+        const header = single
+            ? ['日期', '收盘价', '最优周期天', '窗口收益率', '窗口收益率百分比']
+            : ['日期', '收盘价', '最优快线天', '最优慢线天', '窗口收益率', '窗口收益率百分比'];
+        const sheet = XLSX.utils.json_to_sheet(rows, { header });
+        // 表头改成带单位的中文，并给收益率列套百分比格式（列位随单/双均线变化）
+        const headRow = single
+            ? ['日期', '收盘价(USD)', `最优${typeName}周期(天)`, '窗口收益率', '窗口收益率(%)']
+            : ['日期', '收盘价(USD)', `最优${typeName}快线(天)`, `最优${typeName}慢线(天)`, '窗口收益率', '窗口收益率(%)'];
+        XLSX.utils.sheet_add_aoa(sheet, [headRow], { origin: 'A1' });
+        sheet['!cols'] = single
+            ? [{ wch: 12 }, { wch: 12 }, { wch: 16 }, { wch: 14 }, { wch: 14 }]
+            : [{ wch: 12 }, { wch: 12 }, { wch: 15 }, { wch: 15 }, { wch: 14 }, { wch: 14 }];
+        const retCol = single ? 'D' : 'E';               // 「窗口收益率」小数列
         for (let i = 2; i <= rows.length + 1; i++) {
-            const cell = sheet['D' + i];
+            const cell = sheet[retCol + i];
             if (cell) cell.z = '0.00%';
         }
-        XLSX.utils.book_append_sheet(wb, sheet, '单MA最优周期');
+        XLSX.utils.book_append_sheet(wb, sheet, `${typeName}${single ? '单' : '双'}最优`);
 
+        const gridNote = single
+            ? '在周期网格内穷举所有周期'
+            : '在周期网格内穷举所有「快线 < 慢线」的配对（金叉持币、死叉空仓）';
         const info = [
-            ['指标', '4Y Rolling Best MA（单均线 MA）'],
-            ['定义', '对每一根日线回看 4 年窗口，在周期网格内穷举所有 MA 周期，记录该窗口内最赚钱的周期及其收益率'],
-            ['交易规则', '满仓择时：收盘价 > MA 持币，收盘价 < MA 空仓；按当日收盘价成交，每笔收一次单边手续费'],
+            ['指标', `4Y Rolling Best ${typeName}（${modeName}）`],
+            ['定义', `对每一根日线回看 4 年窗口，${gridNote}，记录该窗口内最赚钱的参数及其收益率`],
+            ['交易规则', single
+                ? `满仓择时：收盘价 > ${typeName} 持币，收盘价 < ${typeName} 空仓；按当日收盘价成交，每笔收一次单边手续费`
+                : `满仓择时：快线上穿慢线（金叉）持币，下穿（死叉）空仓；按当日收盘价成交，每笔收一次单边手续费`],
             ['窗口长度', `${result.windowYears} 年（允许 5% 容差，不足则该日无值，表中已跳过）`],
             ['周期网格', `${cfg.periodMin} ~ ${cfg.periodMax}，步长 ${cfg.periodStep}`],
             ['单边手续费', `${((cfg.feeRate || 0) * 100).toFixed(3)}%`],
@@ -324,10 +361,27 @@ async function exportSingleMA() {
         setLabel(`已导出 ${fmtInt(rows.length)} 行`);
     } catch (e) {
         // 没网 / CDN 被拦：退回 CSV，并如实说明换了格式
-        csvFallback(rows, base);
-        setLabel('已导出 CSV（xlsx 库取不到）');
+        csvFallback(rows, base, single);
+        setLabel('已导出 CSV');
     }
     restore();
+}
+
+// 「导出全部四张」：依次把已计算出的四条序列各导一个 .xlsx（或 CSV 退路）。
+async function exportAllSeries(btn) {
+    const result = AppState.result;
+    const defaultLabel = btn ? btn.textContent : '';
+    const setLabel = (t) => { if (btn) btn.textContent = t; };
+    if (!result || !result.series) { setLabel('尚无结果'); setTimeout(() => setLabel(defaultLabel), 2200); return; }
+    const keys = ['ma_single', 'ma_double', 'ema_single', 'ema_double'].filter((k) => result.series[k]);
+    if (!keys.length) { setLabel('尚无结果'); setTimeout(() => setLabel(defaultLabel), 2200); return; }
+    let done = 0;
+    for (const k of keys) {
+        setLabel(`导出 ${++done}/${keys.length}…`);
+        await exportSeries(k, null);                     // 不占用单元格按钮，进度显示在总按钮上
+    }
+    setLabel(`已导出 ${keys.length} 张`);
+    setTimeout(() => setLabel(defaultLabel), 2600);
 }
 
 // ---------------------------------------------------------------- 自定义回测
@@ -505,7 +559,10 @@ function bindControls() {
         renderAll();
     });
     $('btn-recompute').addEventListener('click', () => runCompute());
-    if ($('btn-export-ma')) $('btn-export-ma').addEventListener('click', () => exportSingleMA());
+    if ($('btn-export-all')) $('btn-export-all').addEventListener('click', (e) => exportAllSeries(e.currentTarget));
+    document.querySelectorAll('[data-export]').forEach((b) => {
+        b.addEventListener('click', (e) => exportSeries(e.currentTarget.dataset.export, e.currentTarget));
+    });
     window.addEventListener('resize', () => ChartsModule.resizeAll());
 }
 
